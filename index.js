@@ -1,9 +1,10 @@
 /**
  * @format
  */
-
-import { AppRegistry } from 'react-native';
+import './android/app/src/utils/polyfills';
+import { registerRootComponent } from 'expo';
 import App from './App';
-import { name as appName } from './app.json';
 
-AppRegistry.registerComponent(appName, () => App);
+// Register the app for native and web via Expo
+registerRootComponent(App);
+
