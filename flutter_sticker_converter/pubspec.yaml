@@ -1,0 +1,25 @@
+name: flutter_sticker_converter
+description: Simple Flutter app to pick images and convert to WhatsApp-ready stickers (512x512 WEBP <= 100KB)
+publish_to: "none"
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # Pick images via Android/iOS system picker (SAF on Android)
+  file_picker: ^8.0.0
+  # Pure Dart image processing (resize, encode WEBP)
+  image: ^4.1.7
+  # App documents directory for saving output
+  path_provider: ^2.1.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+
