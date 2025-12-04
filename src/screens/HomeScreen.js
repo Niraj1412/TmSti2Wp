@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Alert, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
 import ImagePicker from '../components/ImagePicker';
 import StickerConverter from '../components/StickerConverter';
 import StickerList from '../components/StickerList';
@@ -13,9 +13,14 @@ const stepsOrder = ['import', 'convert', 'assign', 'done'];
 const HomeScreen = () => {
   const [step, setStep] = useState('import');
   const [importedStickers, setImportedStickers] = useState([]);
+  const [selectedStickerIds, setSelectedStickerIds] = useState(new Set());
   const [convertedStickers, setConvertedStickers] = useState([]);
   const [conversionSummary, setConversionSummary] = useState(null);
-  const [loading, setLoading] = useState(false);
+
+  const selectedStickers = useMemo(
+    () => importedStickers.filter(item => selectedStickerIds.has(item.id)),
+    [importedStickers, selectedStickerIds],
+  );
 
   const hasImported = useMemo(() => importedStickers.length > 0, [importedStickers]);
   const hasConverted = useMemo(() => convertedStickers.length > 0, [convertedStickers]);
@@ -23,27 +28,49 @@ const HomeScreen = () => {
   const currentStepIndex = Math.max(stepsOrder.indexOf(step), 0);
   const progressPercent = stepsOrder.length > 1 ? ((currentStepIndex + 1) / stepsOrder.length) * 100 : 25;
 
-  const handleTelegramImported = stickers => {
-    setImportedStickers(Array.isArray(stickers) ? stickers : []);
+  const mergeAndSelectStickers = (items, source) => {
+    const mapped = (Array.isArray(items) ? items : [])
+      .map(item => {
+        if (item?.id && item?.uri) return { ...item, source: item?.source ?? source };
+        const path = item?.originalUri || item?.uri || item?.path || item;
+        return buildStickerFromPath(path, { source });
+      })
+      .filter(Boolean);
+
+    if (mapped.length === 0) {
+      Alert.alert('No stickers found', 'We could not read any sticker files to import.');
+      return;
+    }
+
+    const existingUris = new Set(importedStickers.map(sticker => normalizeFilePath(sticker.originalUri || sticker.uri)));
+    const unique = [];
+
+    mapped.forEach(sticker => {
+      const normalized = normalizeFilePath(sticker.originalUri || sticker.uri);
+      if (!normalized || existingUris.has(normalized)) return;
+      existingUris.add(normalized);
+      unique.push(sticker);
+    });
+
+    if (unique.length === 0) {
+      Alert.alert('Nothing new', 'These stickers are already in your selection.');
+      return;
+    }
+
+    setImportedStickers(prev => [...prev, ...unique]);
+    setSelectedStickerIds(prev => new Set([...prev, ...unique.map(sticker => sticker.id)]));
     setConvertedStickers([]);
     setConversionSummary(null);
     setStep('convert');
   };
 
+  const handleTelegramImported = stickers => mergeAndSelectStickers(stickers, 'telegram');
+
   const handleImagesPicked = paths => {
     const mapped = (Array.isArray(paths) ? paths : [])
       .map(path => buildStickerFromPath(path, { source: 'gallery' }))
       .filter(Boolean);
-
-    if (mapped.length === 0) {
-      Alert.alert('No images selected', 'Pick at least one Telegram sticker.');
-      return;
-    }
-
-    setImportedStickers(mapped);
-    setConvertedStickers([]);
-    setConversionSummary(null);
-    setStep('convert');
+    mergeAndSelectStickers(mapped, 'gallery');
   };
 
   const handleConversionResult = (results, summary) => {
@@ -56,9 +83,23 @@ const HomeScreen = () => {
     setStep('done');
   };
 
+  const toggleStickerSelection = sticker => {
+    if (!sticker?.id) return;
+    setSelectedStickerIds(prev => {
+      const next = new Set(prev);
+      if (next.has(sticker.id)) next.delete(sticker.id);
+      else next.add(sticker.id);
+      return next;
+    });
+    setConvertedStickers([]);
+    setConversionSummary(null);
+    setStep('convert');
+  };
+
   const reset = () => {
     setStep('import');
     setImportedStickers([]);
+    setSelectedStickerIds(new Set());
     setConvertedStickers([]);
     setConversionSummary(null);
   };
@@ -92,8 +133,8 @@ const HomeScreen = () => {
 
           <View style={styles.metricsRow}>
             <View style={styles.metricCard}>
-              <Text style={styles.metricValue}>{importedStickers.length}</Text>
-              <Text style={styles.metricLabel}>Imported</Text>
+              <Text style={styles.metricValue}>{selectedStickers.length}</Text>
+              <Text style={styles.metricLabel}>Selected</Text>
             </View>
             <View style={styles.metricCard}>
               <Text style={styles.metricValue}>{convertedStickers.length}</Text>
@@ -102,14 +143,20 @@ const HomeScreen = () => {
           </View>
         </View>
 
-        <TelegramImporter onImported={handleTelegramImported} />
-        <ImagePicker onImagesPicked={handleImagesPicked} loading={loading} />
+        <TelegramImporter onImported={handleTelegramImported} existingStickers={importedStickers} />
+        <ImagePicker onImagesPicked={handleImagesPicked} />
         {hasImported && (
-          <StickerList items={importedStickers} title="Selected stickers" />
+          <StickerList
+            items={importedStickers}
+            title="Choose stickers to convert"
+            selectable
+            selectedIds={selectedStickerIds}
+            onToggleSelect={toggleStickerSelection}
+          />
         )}
         {hasImported && (
           <StickerConverter
-            stickers={importedStickers}
+            stickers={selectedStickers}
             onConverted={handleConversionResult}
             onSummaryChange={setConversionSummary}
           />

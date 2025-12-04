@@ -3,6 +3,7 @@ import { Alert, Platform, StyleSheet, Text, View } from 'react-native';
 import { colors, spacing, typography } from '../styles/theme';
 import ActionButton from './ui/ActionButton';
 import { getRNFS, getRNFSError } from '../utils/fsProxy';
+import { buildStickerFromPath, normalizeFilePath } from '../utils/stickerUtils';
 
 const TELEGRAM_BASE_PATHS = [
   '/storage/emulated/0/Android/data/org.telegram.messenger/files/stickers',
@@ -13,7 +14,8 @@ const STATIC_EXTENSIONS = ['webp', 'png', 'jpg', 'jpeg'];
 
 const ensureFileUri = path => {
   if (!path) return path;
-  return path.startsWith('file://') ? path : `file://${path.startsWith('/') ? '' : '/'}${path}`;
+  if (/^(file|content):\/\//.test(path)) return path;
+  return `file://${path.startsWith('/') ? '' : '/'}${path}`;
 };
 
 const joinPaths = (base, leaf) => {
@@ -29,12 +31,24 @@ const isSupportedFile = filename => {
   return Boolean(ext && STATIC_EXTENSIONS.includes(ext));
 };
 
-const mapToStickerSources = paths => paths
-  .slice(0, MAX_WHATSAPP_STICKERS)
-  .map(path => {
+const mapToStickerSources = (paths, existing = []) => {
+  const existingSet = new Set(
+    (Array.isArray(existing) ? existing : [])
+      .map(item => normalizeFilePath(item?.originalUri || item?.uri || item))
+      .filter(Boolean),
+  );
+
+  const prepared = [];
+  for (const path of paths) {
+    if (prepared.length >= MAX_WHATSAPP_STICKERS) break;
     const uri = ensureFileUri(path);
-    return { uri, originalUri: path };
-  });
+    const normalized = normalizeFilePath(uri);
+    if (!normalized || existingSet.has(normalized)) continue;
+    existingSet.add(normalized);
+    prepared.push(buildStickerFromPath(normalized, { source: 'telegram' }));
+  }
+  return prepared;
+};
 
 const collectWithRNFS = async RNFS => {
   const collected = [];
@@ -76,31 +90,66 @@ const collectWithExpoFs = async FileSystem => {
   return collected;
 };
 
-const requestManualSelection = async onImported => {
+const collectWithSAF = async FileSystem => {
+  if (!FileSystem?.StorageAccessFramework) return [];
+  const SAF = FileSystem.StorageAccessFramework;
   try {
-    const ImagePicker = require('expo-image-picker');
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync().catch(() => ({ granted: false }));
-    if (!perm?.granted) {
-      Alert.alert('Permission needed', 'Allow access to your photos to import stickers.');
-      return false;
+    const initialUri = 'content://com.android.externalstorage.documents/tree/primary%3AAndroid%2Fdata%2Forg.telegram.messenger%2Ffiles%2Fstickers';
+    const permission = await SAF.requestDirectoryPermissionsAsync(initialUri);
+    if (!permission?.granted) return [];
+    const root = permission.directoryUri || permission.uri;
+    const collected = [];
+    const queue = [root];
+    while (queue.length > 0 && collected.length < MAX_WHATSAPP_STICKERS * 2) {
+      const current = queue.shift();
+      let entries = [];
+      try {
+        entries = await SAF.readDirectoryAsync(current);
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        try {
+          const info = await FileSystem.getInfoAsync(entry);
+          if (info?.isDirectory) {
+            queue.push(entry);
+          } else if (isSupportedFile(entry)) {
+            collected.push(entry);
+          }
+        } catch { /* ignore */ }
+      }
     }
-    const mediaTypeValue = (ImagePicker?.MediaType?.Images)
-      || (ImagePicker?.MediaTypeOptions?.Images)
-      || 'images';
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: mediaTypeValue,
-      allowsMultipleSelection: true,
-      selectionLimit: MAX_WHATSAPP_STICKERS,
-      quality: 1,
-    });
-    if (result?.canceled) return false;
-    const assets = Array.isArray(result?.assets) ? result.assets : [];
-    if (assets.length === 0) return false;
-    const mapped = assets.map(asset => ({ uri: asset?.uri, originalUri: asset?.uri })).slice(0, MAX_WHATSAPP_STICKERS);
-    onImported?.(mapped);
-    return true;
-  } catch (_error) {
-    return false;
+    return collected;
+  } catch {
+    return [];
+  }
+};
+
+const requestStoragePermission = async () => {
+  if (Platform.OS !== 'android') return true;
+  try {
+    const Permissions = require('react-native-permissions');
+    const { check, request, RESULTS, PERMISSIONS } = Permissions;
+    const permission = Platform.Version >= 33
+      ? PERMISSIONS.ANDROID.READ_MEDIA_IMAGES
+      : PERMISSIONS.ANDROID.READ_EXTERNAL_STORAGE;
+    const current = await check(permission);
+    if (current === RESULTS.GRANTED || current === RESULTS.LIMITED) return true;
+    const next = await request(permission);
+    return next === RESULTS.GRANTED || next === RESULTS.LIMITED;
+  } catch (_err) {
+    try {
+      // Fallback to the platform permission API if react-native-permissions is unavailable.
+      const { PermissionsAndroid } = require('react-native');
+      const permission = Platform.Version >= 33
+        ? PermissionsAndroid.PERMISSIONS.READ_MEDIA_IMAGES
+        : PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE;
+      if (!permission) return true;
+      const result = await PermissionsAndroid.request(permission);
+      return result === PermissionsAndroid.RESULTS.GRANTED;
+    } catch {
+      return true;
+    }
   }
 };
 
@@ -112,37 +161,56 @@ const tryGetExpoFs = () => {
   }
 };
 
-const TelegramImporter = ({ onImported }) => {
+const TelegramImporter = ({ onImported, existingStickers = [] }) => {
   const [loading, setLoading] = useState(false);
 
   const importFromTelegram = async () => {
     setLoading(true);
     try {
+      const hasPermission = await requestStoragePermission();
+      if (!hasPermission) {
+        Alert.alert('Permission needed', 'Allow file access so we can read the Telegram sticker cache.');
+        return;
+      }
       const RNFS = getRNFS();
       if (RNFS) {
         const files = await collectWithRNFS(RNFS);
-        if (files.length === 0) {
-          Alert.alert('No stickers found', 'Open the sticker pack in Telegram once, then try again.');
-          return;
+        if (files.length > 0) {
+          const mapped = mapToStickerSources(files, existingStickers);
+          if (mapped.length > 0) {
+            onImported?.(mapped);
+            return;
+          }
         }
-        onImported?.(mapToStickerSources(files));
-        return;
       }
 
       const ExpoFileSystem = tryGetExpoFs();
       if (ExpoFileSystem) {
+        const safFiles = await collectWithSAF(ExpoFileSystem);
+        if (safFiles.length > 0) {
+          const mapped = mapToStickerSources(safFiles, existingStickers);
+          if (mapped.length > 0) {
+            onImported?.(mapped);
+            return;
+          }
+        }
         const files = await collectWithExpoFs(ExpoFileSystem);
         if (files.length > 0) {
-          onImported?.(mapToStickerSources(files));
-          return;
+          const mapped = mapToStickerSources(files, existingStickers);
+          if (mapped.length > 0) {
+            onImported?.(mapped);
+            return;
+          }
         }
       }
 
-      const manualSelectionHandled = await requestManualSelection(onImported);
-      if (!manualSelectionHandled) {
-        const reason = getRNFSError();
-        Alert.alert('File access unavailable', reason?.message ?? 'This environment cannot scan Telegram cache automatically.');
-      }
+      const rnfsReason = getRNFSError();
+      Alert.alert(
+        'No stickers found',
+        rnfsReason?.message?.includes('unlinked')
+          ? 'Could not access Telegram cache automatically. Open the pack in Telegram and try again, or link react-native-fs.'
+          : 'We could not locate Telegram sticker files. Open the pack in Telegram once, then try again.',
+      );
     } catch (e) {
       Alert.alert('Import failed', e?.message ?? 'Unable to read Telegram stickers.');
     } finally { setLoading(false); }
@@ -154,7 +222,9 @@ const TelegramImporter = ({ onImported }) => {
     <View style={styles.container}>
       <ActionButton title={loading ? 'Scanning Telegram...' : 'Import Telegram Stickers'} onPress={importFromTelegram} disabled={loading || disabled} loading={loading} />
       <Text style={styles.helper}>
-        {disabled ? 'Telegram import is not available on web.' : 'Automatically discovers Telegram sticker files stored on your device.'}
+        {disabled
+          ? 'Telegram import is not available on web.'
+          : 'Scans Telegram cache automatically and skips stickers you already added.'}
       </Text>
     </View>
   );

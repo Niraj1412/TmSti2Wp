@@ -2,11 +2,21 @@
   "name": "main",
   "displayName": "StickerConverterApp",
   "android": {
-    "package": "com.anonymous.main"
+    "package": "com.anonymous.main",
+    "runtimeVersion": "1.0.0"
   },
   "extra": {
     "eas": {
       "projectId": "5a15b0be-300a-41bc-96ee-55086313b3ae"
+    }
+  },
+  "owner": "12niraj01",
+  "updates": {
+    "url": "https://u.expo.dev/5a15b0be-300a-41bc-96ee-55086313b3ae"
+  },
+  "ios": {
+    "runtimeVersion": {
+      "policy": "appVersion"
     }
   }
 }
