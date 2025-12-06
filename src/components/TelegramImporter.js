@@ -6,8 +6,17 @@ import { getRNFS, getRNFSError } from '../utils/fsProxy';
 import { buildStickerFromPath, normalizeFilePath } from '../utils/stickerUtils';
 
 const TELEGRAM_BASE_PATHS = [
+  // Common cached sticker paths (Android 11+ may use Android/media)
   '/storage/emulated/0/Android/data/org.telegram.messenger/files/stickers',
+  '/storage/emulated/0/Android/media/org.telegram.messenger/files/stickers',
   '/storage/emulated/0/Android/data/org.telegram.messenger.web/files/stickers',
+  '/storage/emulated/0/Android/media/org.telegram.messenger.web/files/stickers',
+  '/storage/emulated/0/Android/data/org.telegram.messenger.beta/files/stickers',
+  '/storage/emulated/0/Android/media/org.telegram.messenger.beta/files/stickers',
+  // Legacy exports and user-accessible folders
+  '/storage/emulated/0/Telegram/Telegram Files/stickers',
+  '/storage/emulated/0/Telegram/Stickers',
+  '/storage/emulated/0/Download/Telegram',
 ];
 const MAX_WHATSAPP_STICKERS = 30;
 const STATIC_EXTENSIONS = ['webp', 'png', 'jpg', 'jpeg'];
@@ -94,8 +103,8 @@ const collectWithSAF = async FileSystem => {
   if (!FileSystem?.StorageAccessFramework) return [];
   const SAF = FileSystem.StorageAccessFramework;
   try {
-    const initialUri = 'content://com.android.externalstorage.documents/tree/primary%3AAndroid%2Fdata%2Forg.telegram.messenger%2Ffiles%2Fstickers';
-    const permission = await SAF.requestDirectoryPermissionsAsync(initialUri);
+    // Let the user pick any folder; we’ll scan once they select.
+    const permission = await SAF.requestDirectoryPermissionsAsync();
     if (!permission?.granted) return [];
     const root = permission.directoryUri || permission.uri;
     const collected = [];
@@ -173,43 +182,53 @@ const TelegramImporter = ({ onImported, existingStickers = [] }) => {
         return;
       }
       const RNFS = getRNFS();
+      const ExpoFileSystem = tryGetExpoFs();
+      const rnfsReason = getRNFSError();
+      const mapAndImport = files => {
+        if (!files?.length) return false;
+        const mapped = mapToStickerSources(files, existingStickers);
+        if (mapped.length > 0) {
+          onImported?.(mapped);
+          return true;
+        }
+        return false;
+      };
+
+      // If react-native-fs is missing (Expo Go/dev client not using native module),
+      // prompt the user to pick a folder via SAF first.
+      let safTried = false;
+      const trySaf = async () => {
+        if (!ExpoFileSystem?.StorageAccessFramework) return [];
+        safTried = true;
+        return collectWithSAF(ExpoFileSystem);
+      };
+
+      if (!RNFS) {
+        const safFiles = await trySaf();
+        if (mapAndImport(safFiles)) return;
+      }
+
       if (RNFS) {
         const files = await collectWithRNFS(RNFS);
-        if (files.length > 0) {
-          const mapped = mapToStickerSources(files, existingStickers);
-          if (mapped.length > 0) {
-            onImported?.(mapped);
-            return;
-          }
-        }
+        if (mapAndImport(files)) return;
       }
 
-      const ExpoFileSystem = tryGetExpoFs();
       if (ExpoFileSystem) {
-        const safFiles = await collectWithSAF(ExpoFileSystem);
-        if (safFiles.length > 0) {
-          const mapped = mapToStickerSources(safFiles, existingStickers);
-          if (mapped.length > 0) {
-            onImported?.(mapped);
-            return;
-          }
+        if (!safTried) {
+          const safFiles = await trySaf();
+          if (mapAndImport(safFiles)) return;
         }
         const files = await collectWithExpoFs(ExpoFileSystem);
-        if (files.length > 0) {
-          const mapped = mapToStickerSources(files, existingStickers);
-          if (mapped.length > 0) {
-            onImported?.(mapped);
-            return;
-          }
-        }
+        if (mapAndImport(files)) return;
       }
 
-      const rnfsReason = getRNFSError();
       Alert.alert(
         'No stickers found',
-        rnfsReason?.message?.includes('unlinked')
-          ? 'Could not access Telegram cache automatically. Open the pack in Telegram and try again, or link react-native-fs.'
-          : 'We could not locate Telegram sticker files. Open the pack in Telegram once, then try again.',
+        !ExpoFileSystem && !RNFS
+          ? 'File access modules are not available in this build. Install a development build (not Expo Go) so we can read Telegram stickers, or use a version of the app that includes file access.'
+          : RNFS
+            ? 'We could not locate Telegram sticker files. Open the pack in Telegram, then tap Import and pick the stickers folder if prompted.'
+            : 'Could not access Telegram cache automatically. Tap "Import Telegram Stickers" again and pick the Telegram stickers folder (usually under Android/Media or Download/Telegram). If you are running Expo Go, build a development APK/AAB so file access works.',
       );
     } catch (e) {
       Alert.alert('Import failed', e?.message ?? 'Unable to read Telegram stickers.');
