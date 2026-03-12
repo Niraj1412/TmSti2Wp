@@ -1,0 +1,23 @@
+diff --git a/node_modules/ffmpeg-kit-react-native/android/build.gradle b/node_modules/ffmpeg-kit-react-native/android/build.gradle
+index 2909280..ce0a3ec 100644
+--- a/node_modules/ffmpeg-kit-react-native/android/build.gradle
++++ b/node_modules/ffmpeg-kit-react-native/android/build.gradle
+@@ -56,6 +56,9 @@ android {
+ repositories {
+   mavenCentral()
+   google()
++  flatDir {
++    dirs 'libs'
++  }
+ 
+   def found = false
+   def defaultDir = null
+@@ -125,5 +128,7 @@ repositories {
+ 
+ dependencies {
+   api 'com.facebook.react:react-native:+'
+-  implementation 'com.arthenica:ffmpeg-kit-' + safePackageName(safeExtGet('ffmpegKitPackage', 'https')) + ':' + safePackageVersion(safeExtGet('ffmpegKitPackage', 'https'))
++  // Use compileOnly to avoid nested AAR packaging issues.
++  compileOnly fileTree(dir: 'libs', include: ['*.aar'])
++  api fileTree(dir: 'libs', include: ['*.jar'])
+ }

@@ -1,6 +1,13 @@
 apply plugin: "com.android.application"
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
+// Autolink Expo modules (expo-file-system, etc.)
+apply from: new File(
+  ["node", "--print", "require.resolve('expo/scripts/autolinking.gradle')"]
+    .execute(null, rootDir)
+    .text
+    .trim()
+)
 
 def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
 
@@ -97,6 +104,14 @@ android {
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
     }
+    splits {
+        abi {
+            enable true
+            reset()
+            include "armeabi-v7a", "arm64-v8a"
+            universalApk false
+        }
+    }
     signingConfigs {
         debug {
             storeFile file('debug.keystore')
@@ -132,6 +147,12 @@ android {
     }
 }
 
+repositories {
+    flatDir {
+        dirs "../../node_modules/ffmpeg-kit-react-native/android/libs"
+    }
+}
+
 // Apply static values from `gradle.properties` to the `android.packagingOptions`
 // Accepts values in comma delimited lists, example:
 // android.packagingOptions.pickFirsts=/LICENSE,**/picasa.ini
@@ -155,6 +176,8 @@ android {
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
+    implementation("com.airbnb.android:lottie:6.4.0")
+    implementation(name: "ffmpeg-kit-release", ext: "aar")
 
     def isGifEnabled = (findProperty('expo.gif.enabled') ?: "") == "true";
     def isWebpEnabled = (findProperty('expo.webp.enabled') ?: "") == "true";

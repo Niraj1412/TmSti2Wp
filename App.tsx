@@ -1,7 +1,7 @@
 import React from 'react';
 import { StatusBar, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import HomeScreen from './src/screens/HomeScreen';
+import StickerApp from './src/screens/StickerApp';
 import { colors } from './src/styles/theme';
 
 class ErrorBoundary extends React.Component<React.PropsWithChildren<{}>, { error?: Error | null }> {
@@ -36,7 +36,7 @@ const App = () => (
     <StatusBar barStyle="light-content" backgroundColor={colors.background} />
     <SafeAreaView style={styles.safeArea}>
       <ErrorBoundary>
-        <HomeScreen />
+        <StickerApp />
       </ErrorBoundary>
     </SafeAreaView>
   </View>

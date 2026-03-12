@@ -1,4 +1,4 @@
-import { Platform, Alert } from 'react-native';
+import { Platform } from 'react-native';
 import { tryRequire } from './safeRequire';
 
 let PickerInstance = null;
@@ -59,19 +59,56 @@ const createExpoPickerFallback = () => {
   };
 };
 
+const createPicker = () => {
+  const expoFallback = createExpoPickerFallback();
+  if (expoFallback) return expoFallback;
+
+  const rnImagePicker = tryRequire('react-native-image-picker');
+  if (rnImagePicker && typeof rnImagePicker.launchImageLibrary === 'function') {
+    return {
+      openPicker: async ({ maxSelectedAssets = 30 } = {}) => {
+        const result = await rnImagePicker.launchImageLibrary({
+          mediaType: 'photo',
+          selectionLimit: maxSelectedAssets,
+        });
+        if (result?.didCancel) {
+          const err = new Error('Picker cancelled');
+          err.code = 'E_PICKER_CANCELLED';
+          throw err;
+        }
+        if (result?.errorCode) {
+          const err = new Error(result?.errorMessage || 'Image picker error');
+          err.code = result?.errorCode;
+          throw err;
+        }
+        const assets = Array.isArray(result?.assets) ? result.assets : [];
+        return assets.map(a => ({
+          realPath: a?.uri || null,
+          path: a?.uri || null,
+          uri: a?.uri || null,
+          filename: a?.fileName || a?.filename || 'image',
+        }));
+      },
+    };
+  }
+
+  const nativePicker = tryRequire('react-native-multiple-image-picker');
+  if (nativePicker && typeof nativePicker.openPicker === 'function') {
+    return {
+      openPicker: async options => nativePicker.openPicker(options),
+    };
+  }
+
+  return null;
+};
+
 if (Platform.OS !== 'web') {
   try {
-    const candidate = tryRequire('react-native-multiple-image-picker');
-    if (candidate && typeof candidate.openPicker === 'function') {
-      PickerInstance = candidate;
-    } else {
-      const fallback = createExpoPickerFallback();
-      if (fallback) {
-        PickerInstance = fallback;
-      } else {
-        throw new Error('react-native-multiple-image-picker appears to be unlinked.');
-      }
+    const picker = createPicker();
+    if (!picker) {
+      throw new Error('No image picker available. Install expo-image-picker or link a native picker.');
     }
+    PickerInstance = picker;
   } catch (error) {
     pickerError = error;
     PickerInstance = null;

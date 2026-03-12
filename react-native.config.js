@@ -6,11 +6,5 @@ module.exports = {
         android: null,
       },
     },
-    // Exclude WhatsApp stickers manager (not compatible with RN 0.81 codegen)
-    'react-native-whatsapp-stickers-manager': {
-      platforms: {
-        android: null,
-      },
-    },
   },
 };

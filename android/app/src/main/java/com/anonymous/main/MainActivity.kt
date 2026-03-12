@@ -1,5 +1,7 @@
 package com.anonymous.main
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 
@@ -17,6 +19,7 @@ class MainActivity : ReactActivity() {
     // This is required for expo-splash-screen.
     setTheme(R.style.AppTheme);
     super.onCreate(null)
+    handleIncomingIntent(intent)
   }
 
   /**
@@ -40,6 +43,12 @@ class MainActivity : ReactActivity() {
           ){})
   }
 
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+    handleIncomingIntent(intent)
+  }
+
   /**
     * Align the back button behavior with Android S
     * where moving root activities to background instead of finishing activities.
@@ -57,5 +66,43 @@ class MainActivity : ReactActivity() {
       // Use the default back button implementation on Android S
       // because it's doing more than [Activity.moveTaskToBack] in fact.
       super.invokeDefaultOnBackPressed()
+  }
+
+  private fun handleIncomingIntent(incoming: Intent?) {
+      if (incoming == null) return
+      val action = incoming.action ?: return
+      if (action != Intent.ACTION_SEND && action != Intent.ACTION_SEND_MULTIPLE && action != Intent.ACTION_VIEW) return
+
+      val uri: Uri? = when (action) {
+          Intent.ACTION_SEND -> incoming.getParcelableExtra(Intent.EXTRA_STREAM) ?: incoming.data
+          Intent.ACTION_SEND_MULTIPLE -> {
+              val list = incoming.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)
+              list?.firstOrNull() ?: incoming.data
+          }
+          else -> incoming.data
+      }
+
+      if (uri == null) return
+
+      val mime = incoming.type ?: try {
+          contentResolver.getType(uri)
+      } catch (_e: Exception) {
+          null
+      }
+
+      val wrapped = buildStickerOpenUri(uri, mime)
+      incoming.data = wrapped
+      setIntent(incoming)
+  }
+
+  private fun buildStickerOpenUri(uri: Uri, mime: String?): Uri {
+      val builder = Uri.Builder()
+          .scheme("stickerconverter")
+          .authority("open")
+          .appendQueryParameter("uri", uri.toString())
+      if (!mime.isNullOrBlank()) {
+          builder.appendQueryParameter("mime", mime)
+      }
+      return builder.build()
   }
 }
